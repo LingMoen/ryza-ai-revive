@@ -1,33 +1,375 @@
-name: Build APK
+name: Build Ryza Chat APK
 
 on:
   workflow_dispatch:
-    push:
-        branches:
-              - main
 
-              jobs:
-                build:
-                    runs-on: ubuntu-latest
-                        steps:
-                              - name: Checkout code
-                                      uses: actions/checkout@v4
+  push:
+    branches:
+      - master
 
-                                            - name: Set up JDK 17
-                                                    uses: actions/setup-java@v4
-                                                            with:
-                                                                      distribution: temurin
-                                                                                java-version: '17'
-                                                                                          cache: gradle
+permissions:
+  contents: read
 
-                                                                                                - name: Grant execute permission for gradlew
-                                                                                                        run: chmod +x gradlew
+jobs:
+  build-apk:
+    runs-on: windows-latest
 
-                                                                                                              - name: Build debug APK
-                                                                                                                      run: ./gradlew assembleDebug
+    steps:
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-                                                                                                                            - name: Upload APK
-                                                                                                                                    uses: actions/upload-artifact@v4
-                                                                                                                                            with:
-                                                                                                                                                      name: app-debug
-                                                                                                                                                                path: app/build/outputs/apk/debug/*.apk
+      # ============================================================
+      # JAVA 17
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # PYTHON
+      # ============================================================
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ============================================================
+      # NODE
+      # build_apk.ps1 calls node scripts/stamp_version.js
+      # ============================================================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ============================================================
+      # ANDROID SDK
+      # ============================================================
+      - name: Install Android SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $sdkRoot = $env:ANDROID_SDK_ROOT
+          if (-not $sdkRoot) {
+            $sdkRoot = $env:ANDROID_HOME
+          }
+
+          if (-not $sdkRoot) {
+            throw "Android SDK path was not found."
+          }
+
+          Write-Host "Android SDK: $sdkRoot"
+
+          # Find sdkmanager
+          $sdkmanager = Get-ChildItem `
+            "$sdkRoot\cmdline-tools" `
+            -Filter "sdkmanager.bat" `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $sdkmanager) {
+            throw "sdkmanager.bat was not found."
+          }
+
+          Write-Host "sdkmanager: $sdkmanager"
+
+          # Accept licenses
+          & $sdkmanager --licenses
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Android license acceptance failed."
+          }
+
+          # Required by build_apk.ps1
+          & $sdkmanager `
+            "platforms;android-34" `
+            "build-tools;34.0.0" `
+            "platform-tools"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Android SDK package installation failed."
+          }
+
+      # ============================================================
+      # CREATE REPO-EXPECTED TOOLCHAIN
+      #
+      # build_apk.ps1 expects:
+      #
+      # .android-tools/
+      # ├── jdk17/
+      # └── android-sdk/
+      #     ├── platforms/android-34/
+      #     └── build-tools/34.0.0/
+      #
+      # ============================================================
+      - name: Prepare Ryza Android toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $sdkRoot = $env:ANDROID_SDK_ROOT
+          if (-not $sdkRoot) {
+            $sdkRoot = $env:ANDROID_HOME
+          }
+
+          if (-not $sdkRoot) {
+            throw "Android SDK path was not found."
+          }
+
+          $javaRoot = $env:JAVA_HOME_17_X64
+          if (-not $javaRoot) {
+            $javaRoot = $env:JAVA_HOME
+          }
+
+          if (-not $javaRoot) {
+            throw "JDK path was not found."
+          }
+
+          $toolRoot = Join-Path $PWD ".android-tools"
+          $repoJdk  = Join-Path $toolRoot "jdk17"
+          $repoSdk  = Join-Path $toolRoot "android-sdk"
+
+          Remove-Item $toolRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+          New-Item -ItemType Directory -Force $toolRoot | Out-Null
+
+          # Junctions avoid copying hundreds of MB.
+          cmd /c "mklink /J `"$repoJdk`" `"$javaRoot`""
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create JDK junction."
+          }
+
+          cmd /c "mklink /J `"$repoSdk`" `"$sdkRoot`""
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create Android SDK junction."
+          }
+
+          Write-Host ""
+          Write-Host "Toolchain prepared:"
+          Write-Host "JDK: $repoJdk"
+          Write-Host "SDK: $repoSdk"
+
+      # ============================================================
+      # VERIFY TOOLCHAIN
+      # ============================================================
+      - name: Verify Android toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $required = @(
+            ".android-tools\jdk17\bin\java.exe",
+            ".android-tools\jdk17\bin\javac.exe",
+            ".android-tools\jdk17\bin\keytool.exe",
+
+            ".android-tools\android-sdk\platforms\android-34\android.jar",
+
+            ".android-tools\android-sdk\build-tools\34.0.0\aapt.exe",
+            ".android-tools\android-sdk\build-tools\34.0.0\aapt2.exe",
+            ".android-tools\android-sdk\build-tools\34.0.0\d8.bat",
+            ".android-tools\android-sdk\build-tools\34.0.0\zipalign.exe",
+            ".android-tools\android-sdk\build-tools\34.0.0\apksigner.bat"
+          )
+
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Missing required tool: $path"
+            }
+
+            Write-Host "OK  $path"
+          }
+
+      # ============================================================
+      # VERIFY SOURCE TREE
+      # Do NOT assume custom _index files.
+      # ============================================================
+      - name: Verify source tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $required = @(
+            "web\index.html",
+            "web\js\app.js",
+            "web\js\api.js",
+            "web\js\config.js",
+            "config\version.json",
+            "android\app\src\main\AndroidManifest.xml"
+          )
+
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Missing source file: $path"
+            }
+
+            Write-Host "OK  $path"
+          }
+
+      # ============================================================
+      # BUILD INDEXES
+      #
+      # Only do this if the repository's script exists.
+      # Do not fail merely because an index script is absent.
+      # ============================================================
+      - name: Build asset indexes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $script = "scripts\build_indexes.py"
+
+          if (Test-Path $script) {
+            Write-Host "Running $script"
+
+            python $script
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "build_indexes.py failed."
+            }
+          }
+          else {
+            Write-Host "build_indexes.py not present; skipping."
+          }
+
+      # ============================================================
+      # PRIVACY CHECK
+      # Same gate used by official APK build.
+      # ============================================================
+      - name: Run privacy check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          python scripts\privacy_check.py web android\app\src\main
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Privacy check failed."
+          }
+
+      # ============================================================
+      # BUILD APK
+      #
+      # This is the repository's official build path:
+      # aapt2 -> javac -> d8 -> aapt -> zipalign -> apksigner
+      # ============================================================
+      - name: Build APK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          powershell `
+            -NoProfile `
+            -ExecutionPolicy Bypass `
+            -File scripts\build_apk.ps1
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "build_apk.ps1 failed."
+          }
+
+      # ============================================================
+      # VERIFY OUTPUT
+      # ============================================================
+      - name: Verify APK output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $apkDir = Join-Path $PWD "output\android"
+
+          if (-not (Test-Path $apkDir)) {
+            throw "APK output directory was not created."
+          }
+
+          $apks = Get-ChildItem $apkDir -Filter "*.apk"
+
+          if ($apks.Count -eq 0) {
+            throw "No APK was produced."
+          }
+
+          foreach ($apk in $apks) {
+            Write-Host ""
+            Write-Host "========================================"
+            Write-Host "APK"
+            Write-Host "========================================"
+            Write-Host "Path : $($apk.FullName)"
+            Write-Host "Size : $([math]::Round($apk.Length / 1MB, 2)) MB"
+          }
+
+      # ============================================================
+      # VERIFY APK SIGNATURE
+      # ============================================================
+      - name: Verify APK signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $apk = Get-ChildItem "output\android" -Filter "*.apk" |
+            Select-Object -First 1
+
+          if (-not $apk) {
+            throw "APK not found."
+          }
+
+          $apksigner = Join-Path `
+            $PWD `
+            ".android-tools\android-sdk\build-tools\34.0.0\apksigner.bat"
+
+          if (-not (Test-Path $apksigner)) {
+            throw "apksigner.bat not found: $apksigner"
+          }
+
+          & $apksigner verify --verbose $apk.FullName
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "APK signature verification failed."
+          }
+
+          Write-Host ""
+          Write-Host "APK signature verification PASSED."
+
+      # ============================================================
+      # LIST APK CONTENT
+      # This is intentionally diagnostic, useful for MT Manager work.
+      # ============================================================
+      - name: Inspect APK contents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $apk = Get-ChildItem "output\android" -Filter "*.apk" |
+            Select-Object -First 1
+
+          if (-not $apk) {
+            throw "APK not found."
+          }
+
+          $zip = Join-Path $env:TEMP "ryza-apk-inspect.zip"
+
+          Copy-Item $apk.FullName $zip -Force
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "APK ASSET ENTRIES"
+          Write-Host "========================================"
+
+          & tar -tf $zip |
+            Select-String "^assets/" |
+            Select-Object -First 200
+
+      # ============================================================
+      # UPLOAD APK
+      # ============================================================
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RyzaChat-APK
+          path: output/android/*.apk
+          if-no-files-found: error
+          retention-days: 7
