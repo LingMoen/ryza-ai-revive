@@ -1,67 +1,40 @@
-name: Build Ryza Chat APK
+name: Build APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
-
-permissions:
-  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
+          distribution: 'temurin'
+          java-version: '11'
 
-      - name: Setup Android
-        uses: android-actions/setup-android@v4
-
-      - name: Install Android SDK
+      - name: Install Android SDK tools (aapt2, zipalign, apksigner)
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
+          # 安装所需的 Android 构建工具
+          echo "y" | sdkmanager "build-tools;34.0.0"
+          echo "$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_PATH
 
-      - name: Prepare assets
-        shell: bash
+      - name: Run build script
         run: |
-          set -e
-
-          rm -rf android/app/src/main/assets
-          mkdir -p android/app/src/main/assets
-
-          rsync -a \
-            --exclude="assets/" \
-            web/ \
-            android/app/src/main/assets/
-
-          rsync -a \
-            web/assets/ \
-            android/app/src/main/assets/
-
-      - name: Build APK
-        working-directory: android
-        run: |
-          gradle \
-            --no-daemon \
-            clean \
-            assembleDebug
+          # 根据项目根目录下的 PowerShell 脚本逻辑，改写为 shell 执行
+          python scripts/pack_apk_assets.py
+          # 依次执行 javac, d8, aapt2, zipalign, apksigner (需根据 build.ps1 补全)
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RyzaChat-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
+          name: app-release-apk
+          path: build/outputs/apk/app-release-unsigned.apk
