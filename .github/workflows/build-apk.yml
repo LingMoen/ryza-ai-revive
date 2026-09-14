@@ -28,10 +28,44 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Setup Android build tools
+      - name: Setup Android toolchain
         shell: pwsh
         run: |
           ./scripts/setup_android_tools.ps1
+
+      - name: Verify Android toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $root = $PWD
+          $sdk = Join-Path $root ".android-tools\android-sdk"
+          $jdk = Join-Path $root ".android-tools\jdk17"
+          $bt = Join-Path $sdk "build-tools\34.0.0"
+
+          Write-Host "JDK:"
+          Get-ChildItem (Join-Path $jdk "bin") | Select-Object Name
+
+          Write-Host "`nBuild Tools:"
+          Get-ChildItem $bt | Select-Object Name
+
+          $required = @(
+            (Join-Path $jdk "bin\javac.exe"),
+            (Join-Path $sdk "platforms\android-34\android.jar"),
+            (Join-Path $bt "aapt2.exe"),
+            (Join-Path $bt "aapt.exe"),
+            (Join-Path $bt "d8.bat"),
+            (Join-Path $bt "zipalign.exe"),
+            (Join-Path $bt "apksigner.bat")
+          )
+
+          foreach ($file in $required) {
+            if (!(Test-Path $file)) {
+              throw "Missing required Android build tool: $file"
+            }
+
+            Write-Host "OK: $file"
+          }
 
       - name: Build APK
         shell: pwsh
