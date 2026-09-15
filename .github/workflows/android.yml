@@ -20,29 +20,20 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-34"
-          sdkmanager "build-tools;34.0.0"
-
-      - name: Verify Android SDK
+      - name: Check Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          sdkmanager --list_installed
-          ls -la "$ANDROID_SDK_ROOT/platforms/android-34"
-          ls -la "$ANDROID_SDK_ROOT/build-tools/34.0.0"
+          echo "Java:"
+          java -version
+          echo "SDK:"
+          ls -la "$ANDROID_SDK_ROOT"
+          echo "Platforms:"
+          ls -la "$ANDROID_SDK_ROOT/platforms" || true
+          echo "Build tools:"
+          ls -la "$ANDROID_SDK_ROOT/build-tools" || true
 
-      - name: Check Android project
-        run: |
-          echo "===== Android project ====="
-          find android -maxdepth 4 -type f | sort
-
-      - name: Build APK
+      - name: Build Android
         working-directory: android
         run: |
           chmod +x gradlew
@@ -50,7 +41,7 @@ jobs:
 
       - name: Find APK
         run: |
-          find android/app/build/outputs/apk -type f -name "*.apk" -print
+          find android/app/build/outputs -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
