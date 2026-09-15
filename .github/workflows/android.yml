@@ -8,35 +8,32 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Check Java
-        shell: powershell
-        run: |
-          java -version
 
       - name: Setup Android tools
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass `
-            -File scripts/setup_android_tools.ps1
+          & ".\scripts\setup_android_tools.ps1"
 
       - name: Build APK
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass `
-            -File scripts/build_apk.ps1
+          & ".\scripts\build_apk.ps1"
 
       - name: Find APK
         shell: powershell
         run: |
-          Get-ChildItem -Path . -Filter *.apk -Recurse |
+          Write-Host "=== APK FILES ==="
+          Get-ChildItem `
+            -Path . `
+            -Filter *.apk `
+            -Recurse |
             Select-Object FullName, Length
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: RyzaChat-Android
-          path: |
-            output/android/*.apk
+          path: output/android/*.apk
+          if-no-files-found: error
