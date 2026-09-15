@@ -1,50 +1,42 @@
-name: Build Android APK
+name: Build Ryza Android APK
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Check Android SDK
+      - name: Check Java
+        shell: powershell
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo "Java:"
           java -version
-          echo "SDK:"
-          ls -la "$ANDROID_SDK_ROOT"
-          echo "Platforms:"
-          ls -la "$ANDROID_SDK_ROOT/platforms" || true
-          echo "Build tools:"
-          ls -la "$ANDROID_SDK_ROOT/build-tools" || true
 
-      - name: Build Android
-        working-directory: android
+      - name: Setup Android tools
+        shell: powershell
         run: |
-          chmod +x gradlew
-          ./gradlew clean assembleDebug --stacktrace
+          powershell -ExecutionPolicy Bypass `
+            -File scripts/setup_android_tools.ps1
+
+      - name: Build APK
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass `
+            -File scripts/build_apk.ps1
 
       - name: Find APK
+        shell: powershell
         run: |
-          find android/app/build/outputs -type f -name "*.apk" -print
+          Get-ChildItem -Path . -Filter *.apk -Recurse |
+            Select-Object FullName, Length
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ryza-android-debug
-          path: android/app/build/outputs/apk/**/*.apk
+          name: RyzaChat-Android
+          path: |
+            output/android/*.apk
